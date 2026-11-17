@@ -1,5 +1,30 @@
 #include "FormSwapMap.h"
 
+#include <charconv>
+
+namespace
+{
+	RE::TESForm* ResolveCachedForm(std::string_view a_token)
+	{
+		const auto separator = a_token.find('~');
+		if (!a_token.starts_with("0x") || separator == std::string_view::npos || separator <= 2 || separator + 1 == a_token.size()) {
+			return nullptr;
+		}
+
+		RE::FormID localID = 0;
+		const auto end = a_token.data() + separator;
+		const auto parsed = std::from_chars(a_token.data() + 2, end, localID, 16);
+		if (parsed.ec != std::errc{} || parsed.ptr != end || localID > 0xFFFFFF) {
+			return nullptr;
+		}
+
+		// Generated entries already name the active plugin and its local ID.
+		const auto form = RE::TESDataHandler::GetSingleton()->LookupForm(localID, a_token.substr(separator + 1));
+		// CommonLib masks off high bits when it resolves a light plugin record.
+		return form && form->GetLocalFormID() == localID ? form : nullptr;
+	}
+}
+
 RE::TESLandTexture* FormSwapMap::GenerateLandTextureSnowVariant(const RE::TESLandTexture* a_landTexture)
 {
 	static constexpr std::array blackList = { "Snow"sv, "Ice"sv, "Winter"sv, "Frozen"sv, "Coast"sv, "River"sv };
@@ -90,21 +115,19 @@ RE::TESLandTexture* FormSwapMap::GenerateLandTextureSnowVariant(const RE::TESLan
 	return RE::TESForm::LookupByID<RE::TESLandTexture>(formID);
 }
 
-bool FormSwapMap::LoadFormSwaps(RECORD a_record, CSimpleIniA::TNamesDepend& a_keys)
+void FormSwapMap::LoadFormSwaps(RECORD a_record, CSimpleIniA::TNamesDepend& a_keys)
 {
 	if (a_keys.empty()) {
-		return true;
+		return;
 	}
 
 	a_keys.sort(CSimpleIniA::Entry::LoadOrder());
 	REX::INFO("\t\t[{}] read {} variants", get_name(a_record), a_keys.size());
 
 	auto& map = get_map(a_record);
-	bool allResolved = true;
 	for (const auto& key : a_keys) {
 		const auto formPair = REX::STR::SPLIT(key.pItem, "|");
 		if (formPair.size() <= kSwap) {
-			allResolved = false;
 			continue;
 		}
 
@@ -113,15 +136,11 @@ bool FormSwapMap::LoadFormSwaps(RECORD a_record, CSimpleIniA::TNamesDepend& a_ke
 			const auto swapFormID = INI::parse_form(formPair[kSwap]);
 			if (formID != 0 && swapFormID != 0) {
 				map.insert_or_assign(formID, swapFormID);
-			} else {
-				allResolved = false;
 			}
 		} catch (const std::logic_error&) {
 			REX::WARN("\t\t[{}] invalid swap: {}", get_name(a_record), key.pItem);
-			allResolved = false;
 		}
 	}
-	return allResolved;
 }
 
 void FormSwapMap::LoadFormSwaps(const CSimpleIniA& a_ini)
@@ -135,31 +154,67 @@ void FormSwapMap::LoadFormSwaps(const CSimpleIniA& a_ini)
 	}
 }
 
-bool FormSwapMap::LoadOrGenerateWinterFormSwaps(CSimpleIniA& a_ini, bool a_forceRegenerate, const std::array<bool, std::to_underlying(RECORD::kFlora)>& a_skipRecords)
+bool FormSwapMap::LoadCachedFormSwaps(RECORD a_record, const CSimpleIniA::TNamesDepend& a_keys)
 {
-	bool save = a_forceRegenerate;
+	static constexpr std::array recordTypes{
+		RE::TESLandTexture::FORMTYPE, RE::TESObjectACTI::FORMTYPE, RE::TESFurniture::FORMTYPE,
+		RE::BGSMovableStatic::FORMTYPE, RE::TESObjectSTAT::FORMTYPE, RE::TESObjectTREE::FORMTYPE
+	};
+	static_assert(recordTypes.size() == std::to_underlying(RECORD::kFlora));
+
+	const auto type = recordTypes[std::to_underlying(a_record)];
+	FlatMap<RE::FormID, RE::FormID> loaded;
+	loaded.reserve(a_keys.size());
+	for (const auto& key : a_keys) {
+		const std::string_view pair = key.pItem;
+		const auto separator = pair.find('|');
+		if (separator == std::string_view::npos || pair.find('|', separator + 1) != std::string_view::npos) {
+			return false;
+		}
+		const auto base = ResolveCachedForm(pair.substr(0, separator));
+		const auto swap = ResolveCachedForm(pair.substr(separator + 1));
+		if (!base || !swap || base->GetFormType() != type || swap->GetFormType() != type) {
+			return false;
+		}
+		if (!loaded.try_emplace(base->GetFormID(), swap->GetFormID()).second) {
+			return false;
+		}
+	}
+
+	get_map(a_record) = std::move(loaded);
+	REX::INFO("\t\t[{}] read {} variants", get_name(a_record), a_keys.size());
+	return true;
+}
+
+bool FormSwapMap::LoadOrGenerateWinterFormSwaps(CSimpleIniA& a_ini, WinterCache::CategoryCounts& a_counts, const std::array<bool, std::to_underlying(RECORD::kFlora)>& a_skipRecords)
+{
+	static_assert(std::tuple_size_v<WinterCache::CategoryCounts> == std::to_underlying(RECORD::kFlora));
+	bool save = false;
 
 	for (const auto record : standard_records()) {
+		const auto index = std::to_underlying(record);
 		const auto type = get_name(record);
-		if (a_forceRegenerate) {
-			a_ini.Delete(type.data(), nullptr, true);
-		}
-		if (a_skipRecords[std::to_underlying(record)]) {
+		auto& count = a_counts[index];
+		if (a_skipRecords[index]) {
+			if (count == WinterCache::kNotGenerated) {
+				count = WinterCache::kDisabled;
+				save = true;
+			}
 			REX::INFO("\t\t[{}] skipping...", type);
 			continue;
 		}
 
 		CSimpleIniA::TNamesDepend keys;
 		a_ini.GetAllKeys(type.data(), keys);
-		if (!keys.empty() && LoadFormSwaps(record, keys)) {
+		if (count >= 0 && std::cmp_equal(count, keys.size()) && LoadCachedFormSwaps(record, keys)) {
 			continue;
 		}
-		if (!keys.empty()) {
-			REX::WARN("\t\t[{}] invalid cached swaps, regenerating", type);
-			get_map(record).clear();
-			a_ini.Delete(type.data(), nullptr, true);
+		if (count >= 0 || !keys.empty()) {
+			REX::WARN("\t\t[{}] invalid or incomplete cached swaps, regenerating", type);
 		}
 
+		a_ini.Delete(type.data(), nullptr, true);
+		get_map(record).clear();
 		save = true;
 		TempFormSwapMap map{};
 		switch (record) {
@@ -184,6 +239,7 @@ bool FormSwapMap::LoadOrGenerateWinterFormSwaps(CSimpleIniA& a_ini, bool a_force
 		default:
 			break;
 		}
+		count = static_cast<std::int64_t>(get_map(record).size());
 	}
 
 	return save;

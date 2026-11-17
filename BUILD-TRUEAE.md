@@ -21,3 +21,9 @@ with the x64 v143 toolset and a Windows SDK, and make Git and CMake available.
 
 The DLL and PDB are produced in `build-ae/Release`. This source snapshot
 targets the Skyrim 1.6.1170 build used to test the fix.
+
+Enable the cache round-trip and integrity tests in an existing build with
+
+    cmake -S . -B build-ae -DBUILD_TESTING=ON
+    cmake --build build-ae --config Release --target WinterCacheTests
+    ctest --test-dir build-ae -C Release --output-on-failure

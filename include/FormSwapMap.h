@@ -1,5 +1,7 @@
 #pragma once
 
+#include "WinterCache.h"
+
 class FormSwapMap
 {
 public:
@@ -26,7 +28,7 @@ public:
 
 	void LoadFormSwaps(const CSimpleIniA& a_ini);
 
-	bool LoadOrGenerateWinterFormSwaps(CSimpleIniA& a_ini, bool a_forceRegenerate, const std::array<bool, std::to_underlying(RECORD::kFlora)>& a_skipRecords);
+	bool LoadOrGenerateWinterFormSwaps(CSimpleIniA& a_ini, WinterCache::CategoryCounts& a_counts, const std::array<bool, std::to_underlying(RECORD::kFlora)>& a_skipRecords);
 
 	RE::TESBoundObject* GetSwapForm(const RE::TESForm* a_form);
 
@@ -77,7 +79,8 @@ public:
 	}
 
 private:
-	bool LoadFormSwaps(RECORD a_record, CSimpleIniA::TNamesDepend& a_keys);
+	void LoadFormSwaps(RECORD a_record, CSimpleIniA::TNamesDepend& a_keys);
+	bool LoadCachedFormSwaps(RECORD a_record, const CSimpleIniA::TNamesDepend& a_keys);
 
 	using TempFormSwapMap = std::map<RE::FormID, RE::FormID>;
 

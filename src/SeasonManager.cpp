@@ -2,18 +2,12 @@
 #include "Papyrus.h"
 
 #include <chrono>
-#include <fstream>
-#include <iterator>
 #include <optional>
-#include <process.h>
 #include <Windows.h>
 #undef ERROR
 
 namespace
 {
-	constexpr std::string_view utf8Bom = "\xEF\xBB\xBF";
-	constexpr std::string_view cacheStampPrefix = "; Seasons of Skyrim winter cache v2 ";
-
 	bool HashPluginFile(std::size_t& a_hash, const RE::TESFile& a_plugin)
 	{
 		const auto path = std::filesystem::path(L"Data") / a_plugin.GetFilename();
@@ -77,53 +71,6 @@ namespace
 		return hash;
 	}
 
-	bool LoadWinterCache(CSimpleIniA& a_ini, const std::filesystem::path& a_path, std::string_view a_stamp)
-	{
-		std::ifstream file(a_path, std::ios::binary);
-		std::string header;
-		if (!std::getline(file, header)) {
-			return false;
-		}
-		std::string_view stamp = header;
-		if (stamp.starts_with(utf8Bom)) {
-			stamp.remove_prefix(utf8Bom.size());
-		}
-		if (stamp.ends_with('\r')) {
-			stamp.remove_suffix(1);
-		}
-		if (stamp != a_stamp) {
-			return false;
-		}
-
-		const std::string contents(std::istreambuf_iterator<char>{ file }, {});
-		return !file.bad() && a_ini.LoadData(contents) >= SI_OK;
-	}
-
-	bool SaveWinterCache(const CSimpleIniA& a_ini, const std::filesystem::path& a_path, std::string_view a_stamp)
-	{
-		std::string contents{ utf8Bom };
-		contents.append(a_stamp).append("\r\n");
-		if (a_ini.Save(contents) < SI_OK) {
-			return false;
-		}
-
-		auto tempPath = a_path;
-		tempPath += std::format(L".{}.tmp", _getpid());
-		std::ofstream file(tempPath, std::ios::binary | std::ios::trunc);
-		file.write(contents.data(), static_cast<std::streamsize>(contents.size()));
-		file.close();
-
-		std::error_code error;
-		if (file) {
-			std::filesystem::rename(tempPath, a_path, error);
-			if (!error) {
-				return true;
-			}
-		}
-
-		std::filesystem::remove(tempPath, error);
-		return false;
-	}
 }
 
 Season* SeasonManager::GetSeasonImpl(SEASON_TYPE a_season)
@@ -307,18 +254,24 @@ void SeasonManager::LoadOrGenerateWinterFormSwap()
 	ini.SetMultiKey();
 	ini.SetAllowKeyOnly();
 
+	WinterCache::CategoryCounts categoryCounts;
+	categoryCounts.fill(WinterCache::kNotGenerated);
 	const auto fingerprint = GetWinterCacheFingerprint();
-	const auto stamp = fingerprint ? std::format("{}{:016x}", cacheStampPrefix, *fingerprint) : std::string{};
-	const auto shouldRegenerate = !fingerprint || !LoadWinterCache(ini, path, stamp);
-	if (shouldRegenerate) {
-		ini.Reset();
-		REX::INFO("\tWinter cache missing or loaded plugins changed, rebuilding main WIN formswap");
-	} else {
+	const auto cacheResult = fingerprint ? WinterCache::Load(path, *fingerprint, ini, categoryCounts) : WinterCache::LoadResult::kMiss;
+	if (cacheResult == WinterCache::LoadResult::kLoaded) {
 		REX::INFO("\tLoaded plugin fingerprint matches winter cache");
+	} else {
+		ini.Reset();
+		if (cacheResult == WinterCache::LoadResult::kInvalid) {
+			REX::WARN("\tWinter cache failed integrity checks, rebuilding main WIN formswap");
+		} else {
+			REX::INFO("\tWinter cache missing or loaded plugins changed, rebuilding main WIN formswap");
+		}
 	}
 
 	auto& winFormSwapMap = winter.GetFormSwapMap();
-	if (winFormSwapMap.LoadOrGenerateWinterFormSwaps(ini, shouldRegenerate, mainWINSwap.skipRecords) && fingerprint && !SaveWinterCache(ini, path, stamp)) {
+	if (winFormSwapMap.LoadOrGenerateWinterFormSwaps(ini, categoryCounts, mainWINSwap.skipRecords) && fingerprint &&
+		!WinterCache::Save(path, *fingerprint, ini, categoryCounts)) {
 		REX::WARN("\tCouldn't save main WIN formswap settings");
 	}
 	REX::INFO("\tMain WIN form swaps ready in {:.3f} s", std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());

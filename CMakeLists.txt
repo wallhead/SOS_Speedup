@@ -8,6 +8,7 @@ set(AE_VERSION 1)
 option(COPY_BUILD "Copy the build output to the Skyrim directory." TRUE)
 option(BUILD_SKYRIMVR "Build for Skyrim VR" OFF)
 option(BUILD_SKYRIMAE "Build for Skyrim AE" OFF)
+option(BUILD_TESTING "Build winter cache tests" OFF)
 
 # ---- Cache build vars ----
 macro(set_from_environment VARIABLE)
@@ -156,6 +157,18 @@ find_path(CLIB_UTIL_INCLUDE_DIRS "ClibUtil/detail/SimpleIni.h")
 find_path(MERGEMAPPER_INCLUDE_DIRS "MergeMapperPluginAPI.h")
 
 find_package(boost_unordered CONFIG REQUIRED)
+
+if(BUILD_TESTING)
+	enable_testing()
+	find_package(SimpleIni CONFIG REQUIRED)
+	find_package(boost_container_hash CONFIG REQUIRED)
+	add_executable(WinterCacheTests tests/WinterCacheTests.cpp src/WinterCache.cpp)
+	target_compile_features(WinterCacheTests PRIVATE cxx_std_23)
+	target_compile_definitions(WinterCacheTests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+	target_include_directories(WinterCacheTests PRIVATE include)
+	target_link_libraries(WinterCacheTests PRIVATE SimpleIni::SimpleIni Boost::container_hash)
+	add_test(NAME WinterCacheTests COMMAND WinterCacheTests)
+endif()
 
 # ---- Add source files ----
 include(cmake/headerlist.cmake)
