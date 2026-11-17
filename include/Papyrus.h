@@ -1,0 +1,71 @@
+#pragma once
+
+namespace Papyrus
+{
+	using VM = RE::BSScript::Internal::VirtualMachine;
+	using StackID = RE::VMStackID;
+
+	bool Bind(VM* a_vm);
+
+	namespace Events
+	{
+		enum : std::uint32_t
+		{
+			kSerializationVersion = 1,
+
+			kSeasonsOfSkyrim = 'SESN',
+
+			kSeasonChange = 'SOSC'
+		};
+
+		class Manager : public REX::TSingleton<Manager>
+		{
+		public:
+			void Save(SKSE::SerializationInterface* a_intfc, std::uint32_t a_version);
+			void Load(SKSE::SerializationInterface* a_intfc);
+			void Revert(SKSE::SerializationInterface* a_intfc);
+
+			// members
+			SKSE::RegistrationSet<std::uint32_t, std::uint32_t, bool> seasonChange{ "OnSeasonChange"sv };
+		};
+
+		void SaveCallback(SKSE::SerializationInterface* a_intfc);
+		void LoadCallback(SKSE::SerializationInterface* a_intfc);
+		void RevertCallback(SKSE::SerializationInterface* a_intfc);
+	}
+
+	namespace Functions
+	{
+		template <class T>
+		void RegisterForSeasonChangeImpl(T* a_type)
+		{
+			if (a_type) {
+				Events::Manager::GetSingleton()->seasonChange.Register(a_type);
+			}
+		}
+
+		template <class T>
+		void UnregisterForSeasonChangeImpl(T* a_type)
+		{
+			if (a_type) {
+				Events::Manager::GetSingleton()->seasonChange.Unregister(a_type);
+			}
+		}
+
+		void RegisterForSeasonChange_Alias(VM*, StackID, RE::StaticFunctionTag*, RE::BGSRefAlias* a_alias);
+		void RegisterForSeasonChange_AME(VM*, StackID, RE::StaticFunctionTag*, RE::ActiveEffect* a_activeEffect);
+		void RegisterForSeasonChange_Form(VM*, StackID, RE::StaticFunctionTag*, RE::TESForm* a_form);
+
+		void UnregisterForSeasonChange_Alias(VM*, StackID, RE::StaticFunctionTag*, RE::BGSRefAlias* a_alias);
+		void UnregisterForSeasonChange_AME(VM*, StackID, RE::StaticFunctionTag*, RE::ActiveEffect* a_activeEffect);
+		void UnregisterForSeasonChange_Form(VM*, StackID, RE::StaticFunctionTag*, RE::TESForm* a_form);
+
+		std::uint32_t GetCurrentSeason(VM*, StackID, RE::StaticFunctionTag*);
+
+		std::uint32_t GetSeasonOverride(VM*, StackID, RE::StaticFunctionTag*);
+		void          SetSeasonOverride(VM*, StackID, RE::StaticFunctionTag*, std::uint32_t a_season);
+		void          ClearSeasonOverride(VM*, StackID, RE::StaticFunctionTag*);
+
+		void Bind(VM& a_vm);
+	}
+}
